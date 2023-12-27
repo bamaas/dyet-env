@@ -1,0 +1,103 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: doyoueventrack-data-migration
+  namespace: ${NAMESPACE_IMPORT}
+spec:
+  backoffLimit: 0
+  ttlSecondsAfterFinished: 1
+  activeDeadlineSeconds: 360
+  template:
+    metadata:
+      labels:
+        job: data-migration
+    spec:
+      restartPolicy: Never
+      serviceAccountName: superuser
+      containers:
+      - name: data-migration
+        image: bitnami/kubectl:1.20
+        imagePullPolicy: IfNotPresent
+        env:
+        - name: POSTGRES_USER
+          valueFrom:
+            secretKeyRef:
+              name: ${RELEASE_NAME_IMPORT}-database-connect
+              key: username
+        - name: POSTGRES_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: ${RELEASE_NAME_IMPORT}-database-connect
+              key: password
+        - name: DB_HOST
+          valueFrom:
+            secretKeyRef:
+              name: ${RELEASE_NAME_IMPORT}-database-connect
+              key: host
+        - name: DB_PORT
+          valueFrom:
+            secretKeyRef:
+              name: ${RELEASE_NAME_IMPORT}-database-connect
+              key: port
+        - name: DB_NAME
+          valueFrom:
+            secretKeyRef:
+              name: ${RELEASE_NAME_IMPORT}-database-connect
+              key: database
+        command: 
+          - /bin/bash
+          - -c
+          - |
+            # Settings
+            export NS_NAME_EXPORT=${NAMESPACE_EXPORT}
+            export NS_NAME_IMPORT=${NAMESPACE_IMPORT}
+            export POD_NAME_IMPORT=$(kubectl -n ${NAMESPACE_IMPORT} get pod -l app.kubernetes.io/name=postgresql,app.kubernetes.io/managed-by=Helm,app.kubernetes.io/instance=${RELEASE_NAME_IMPORT} -o name)
+            export POD_NAME_IMPORT=${RELEASE_NAME_IMPORT}-postgresql-0
+            export DUMP_FILE_NAME="/tmp/database.sql"
+            export CONNECTION_STRING=postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@${DB_HOST}:${DB_PORT}
+
+            # Setup (in case the import failed the maintenance db could still exist)
+            kubectl exec -n ${NS_NAME_IMPORT} -i ${POD_NAME_IMPORT} -- psql ${CONNECTION_STRING}/${DB_NAME} -c "DROP DATABASE maintenance;" 2>/dev/null
+
+            set -e
+
+            # Export
+            export POSTGRES_USER_EXPORT=$(kubectl -n ${NAMESPACE_EXPORT} get secret ${RELEASE_NAME_EXPORT}-database-connect --template={{.data.username}} | base64 -d)
+            export POSTGRES_PASSWORD_EXPORT=$(kubectl -n ${NAMESPACE_EXPORT} get secret ${RELEASE_NAME_EXPORT}-database-connect --template={{.data.password}} | base64 -d)
+            export DB_NAME_EXPORT=$(kubectl -n ${NAMESPACE_EXPORT} get secret ${RELEASE_NAME_EXPORT}-database-connect --template={{.data.database}} | base64 -d)
+            export POD_NAME_EXPORT=$(kubectl -n ${NAMESPACE_EXPORT} get pod -l app.kubernetes.io/name=postgresql,app.kubernetes.io/managed-by=Helm,app.kubernetes.io/instance=${RELEASE_NAME_EXPORT} -o name)
+            echo "> Exporting database ${DB_NAME_EXPORT} from pod ${POD_NAME_EXPORT} in namespace ${NS_NAME_EXPORT}..."
+            kubectl -n ${NS_NAME_EXPORT} exec ${POD_NAME_EXPORT} -- bash -c "PGPASSWORD='${POSTGRES_PASSWORD_EXPORT}' pg_dump -U ${POSTGRES_USER_EXPORT} ${DB_NAME_EXPORT}" > ${DUMP_FILE_NAME}
+
+            # Replace values
+            echo "> Replacing redirect url values..."
+            FRONTEND_HOST_IMPORT=$(kubectl -n ${NS_NAME_IMPORT} get `kubectl -n ${NS_NAME_IMPORT} get ingress -l app.kubernetes.io/instance=${RELEASE_NAME_IMPORT},app.kubernetes.io/name=frontend -o name` -o=jsonpath='{.spec.rules[0].host}')
+            FRONTEND_HOST_EXPORT=$(kubectl -n ${NS_NAME_EXPORT} get `kubectl -n ${NS_NAME_EXPORT} get ingress -l app.kubernetes.io/instance=${RELEASE_NAME_EXPORT},app.kubernetes.io/name=frontend -o name` -o=jsonpath='{.spec.rules[0].host}')
+            sed -i "s/${FRONTEND_HOST_EXPORT}/${FRONTEND_HOST_IMPORT}/g" ${DUMP_FILE_NAME}
+
+            # Import
+            echo "> Creating tmp db maintenance to make the import possible..."
+            kubectl exec -n ${NS_NAME_IMPORT} -i ${POD_NAME_IMPORT} -- psql ${CONNECTION_STRING}/${DB_NAME} -c "CREATE DATABASE maintenance;" 1>/dev/null
+
+            echo "> Deleting & recreating database ${DB_NAME} in the import destination for pod ${POD_NAME_IMPORT} in namespace ${NS_NAME_IMPORT}..."
+            kubectl exec -n ${NS_NAME_IMPORT} -i ${POD_NAME_IMPORT} -- psql ${CONNECTION_STRING}/maintenance -c "DROP DATABASE ${DB_NAME} WITH (FORCE);" 1>/dev/null
+            kubectl exec -n ${NS_NAME_IMPORT} -i ${POD_NAME_IMPORT} -- psql ${CONNECTION_STRING}/maintenance -c "CREATE DATABASE ${DB_NAME};" 1>/dev/null
+  
+            echo "> Importing data from ${DUMP_FILE_NAME} into db ${DB_NAME} in pod ${POD_NAME_IMPORT} in namespace ${NS_NAME_IMPORT}..."
+            cat ${DUMP_FILE_NAME} | kubectl exec -n ${NS_NAME_IMPORT} -i ${POD_NAME_IMPORT} -- psql ${CONNECTION_STRING}/${DB_NAME} 1>/dev/null
+
+            echo "> Dropping tmp db maintenance to make the import possible..."
+            kubectl exec -n ${NS_NAME_IMPORT} -i ${POD_NAME_IMPORT} -- psql ${CONNECTION_STRING}/${DB_NAME} -c "DROP DATABASE maintenance;" 1>/dev/null
+
+            echo "> Restarting iam pod..."
+            kubectl -n ${NS_NAME_IMPORT} delete po -l app.kubernetes.io/name=iam,app.kubernetes.io/instance=${RELEASE_NAME_IMPORT}
+            kubectl -n ${NS_NAME_IMPORT} wait --for=condition=ready pod -l app.kubernetes.io/name=iam,app.kubernetes.io/instance=${RELEASE_NAME_IMPORT} --timeout=120s
+
+            echo "---------------------------------------"
+            echo "> Success! Import done."
+        volumeMounts:
+          - name: dumps
+            mountPath: /mnt
+      volumes:
+      - name: dumps
+        emptyDir: {}

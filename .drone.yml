@@ -1,0 +1,155 @@
+---
+kind: pipeline
+type: kubernetes
+name: Data migration
+service_account_name: superuser
+
+trigger:
+  event:
+  - custom
+
+volumes:
+- name: drone-ssh-keys
+  claim:
+    name: drone-ssh-keys
+    read_only: true
+
+globals:
+  - &ssh_keys
+    volumes:
+      - name: drone-ssh-keys
+        path: /root/.ssh
+  - &image
+    image: bamaas/dyet-developer:0.0.22
+
+steps:
+- name: Migrate data
+  <<: [*image]
+  commands:
+  - make data_migration
+  environment:
+    NAMESPACE_EXPORT: ${NAMESPACE_EXPORT}
+    RELEASE_NAME_EXPORT: ${RELEASE_NAME_EXPORT}
+    NAMESPACE_IMPORT: ${NAMESPACE_IMPORT}
+    RELEASE_NAME_IMPORT: ${RELEASE_NAME_IMPORT}
+
+- name: Notify
+  <<: [*image]
+  environment:
+    GOTIFY:
+      from_secret: GOTIFY_TOKEN
+  commands:
+   - |
+    curl "http://gotify.gotify.svc.cluster.local/message?token=$${GOTIFY}" \
+    -F "priority=5" \
+    -F "title=${DRONE_REPO} pipeline failed" \
+    -F "message=Branch: ${DRONE_COMMIT_BRANCH} | Build link: ${DRONE_BUILD_LINK}"    
+  when:
+    status:
+    - failure
+
+#######################################################################################################
+# Promote
+#######################################################################################################
+
+---
+kind: pipeline
+type: kubernetes
+name: Promote app from acc to prd
+service_account_name: superuser
+
+trigger:
+  event:
+  - promote
+  target:
+  - prd
+
+globals:
+  - &ssh_keys
+    volumes:
+      - name: drone-ssh-keys
+        path: /root/.ssh
+  - &image
+    image: bamaas/dyet-developer:0.0.22
+
+volumes:
+- name: drone-ssh-keys
+  claim:
+    name: drone-ssh-keys
+    read_only: true
+
+clone:
+  disable: true
+
+steps:
+
+- name: Clone Bas/env
+  <<: [*ssh_keys, *image]
+  commands:
+    - git clone -b master git@gitea.kubernetes.lan.basmaas.nl:Bas/env.git .
+
+- name: Copy Chart.yaml from acc to prd
+  <<: [*image]
+  commands:
+    - cp ./env/acc/${APP}/Chart.yaml ./env/prd/${APP}/Chart.yaml
+
+- name: Push changes
+  <<: [*ssh_keys, *image]
+  commands:
+    - git add .
+    - git commit -m "Promoted application ${APP} to prd environment."
+    - git push -u origin HEAD
+
+# ---
+# kind: pipeline
+# type: kubernetes
+# name: Update application
+
+# trigger:
+#   event:
+#   - custom
+
+# volumes:
+# - name: drone-ssh-keys
+#   claim:
+#     name: drone-ssh-keys
+#     read_only: true
+
+# globals:
+#   - &ssh_keys
+#     volumes:
+#       - name: drone-ssh-keys
+#         path: /root/.ssh
+#   - &image
+#     image: bamaas/dyet-developer:0.0.22
+
+# steps:
+# - name: Update application version
+#   <<: [*image]
+#   commands:
+#   - make update ENV=${ENV} APP=${APP} VERSION=${VERSION}
+
+# - name: Commit change
+#   <<: [*ssh_keys, *image]
+#   volumes:
+#   - name: drone-ssh-keys
+#     path: /root/.ssh
+#   commands:
+#   - git add .
+#   - git commit -m "Update application ${APP} to version ${VERSION} in env ${ENV}"
+#   - git push -u origin HEAD
+
+# - name: Notify
+#   <<: [*image]
+#   environment:
+#     GOTIFY:
+#       from_secret: GOTIFY_TOKEN
+#   commands:
+#    - |
+#     curl "http://gotify.gotify.svc.cluster.local/message?token=$${GOTIFY}" \
+#     -F "priority=5" \
+#     -F "title=${DRONE_REPO} pipeline failed" \
+#     -F "message=Branch: ${DRONE_COMMIT_BRANCH} | Build link: ${DRONE_BUILD_LINK}"    
+#   when:
+#     status:
+#     - failure

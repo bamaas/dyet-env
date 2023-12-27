@@ -1,0 +1,44 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  generateName: test-
+  annotations:
+    argocd.argoproj.io/hook: PostSync
+    argocd.argoproj.io/hook-delete-policy: HookSucceeded
+    argocd.argoproj.io/sync-wave: "1"
+spec:
+  backoffLimit: 0
+  ttlSecondsAfterFinished: 60
+  activeDeadlineSeconds: 360
+  template:
+    metadata:
+      labels:
+        argocd.hook.postsync: test
+    spec:
+      restartPolicy: Never
+      serviceAccountName: superuser
+      containers:
+      - name: test
+        image: bamaas/dyet-developer:0.0.22
+        imagePullPolicy: IfNotPresent
+        env:
+          - name: ENV
+            value: acc
+          - name: DRONE_SERVER
+            value: https://drone.kubernetes.lan.basmaas.nl
+          - name: DRONE_TOKEN
+            value: {{ .Values.drone.token }}
+        command: 
+          - /bin/bash
+          - -c
+          - |
+            set -e
+            git clone https://gitea.kubernetes.lan.basmaas.nl/Bas/env.git env && cd env
+            version=$(cat env/${ENV}/doyoueventrack/Chart.yaml | grep -A 1 doyoueventrack | grep version | tail -n 1 | cut -d':' -f2-)
+            git clone https://gitea.kubernetes.lan.basmaas.nl/Bas/doyoueventrack.git doyoueventrack && cd doyoueventrack
+            git fetch --all --tags
+            commit=$(git rev-list -n 1 ${version})
+            build_number=$(drone build create --commit ${commit} Bas/doyoueventrack --param ENV=${ENV} --format "{{ .Number }}")
+            git clone -b master https://gitea.kubernetes.lan.basmaas.nl/Bas/drone-common.git .common
+            /bin/sh .common/wait-until-build-succeeded Bas/doyoueventrack ${build_number}
+

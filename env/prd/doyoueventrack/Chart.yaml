@@ -1,0 +1,10 @@
+apiVersion: v2
+name: env
+description: env
+type: application
+version: 0.1.0
+
+dependencies:
+- name: doyoueventrack
+  version: 0.2.5
+  repository: oci://registry-1.docker.io/bamaas

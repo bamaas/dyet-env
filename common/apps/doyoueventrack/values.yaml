@@ -1,0 +1,28 @@
+doyoueventrack:
+
+  frontend:
+    ingress:
+      enabled: true
+      annotations:
+        nginx.ingress.kubernetes.io/whitelist-source-range: 0.0.0.0/0
+        cert-manager.io/cluster-issuer: letsencrypt-prd
+
+  backend:
+    ingress:
+      enabled: true
+      annotations:
+        nginx.ingress.kubernetes.io/whitelist-source-range: 0.0.0.0/0
+        cert-manager.io/cluster-issuer: letsencrypt-prd
+
+  database:
+    postgresql:
+      primary:
+        persistence:
+          size: 512Mi
+
+  iam:
+    ingress:
+      enabled: true
+      annotations:
+        nginx.ingress.kubernetes.io/whitelist-source-range: 0.0.0.0/0
+        cert-manager.io/cluster-issuer: letsencrypt-prd

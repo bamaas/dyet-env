@@ -1,0 +1,37 @@
+doyoueventrack:
+
+  frontend:
+    ingress:
+      hosts:
+      - host: doyoueventrack.kubernetes.lan.basmaas.nl
+        paths:
+          - path: /
+            pathType: ImplementationSpecific
+      tls:
+      - secretName: doyoueventrack.kubernetes.lan.basmaas.nl
+        hosts:
+          - doyoueventrack.kubernetes.lan.basmaas.nl
+
+  backend:
+    ingress:
+      hosts:
+      - host: api.doyoueventrack.kubernetes.lan.basmaas.nl
+        paths:
+        - path: /
+          pathType: ImplementationSpecific
+      tls:
+      - secretName: api.doyoueventrack.kubernetes.lan.basmaas.nl
+        hosts:
+          - api.doyoueventrack.kubernetes.lan.basmaas.nl
+
+  iam:
+    ingress:
+      hosts:
+      - host: auth.doyoueventrack.kubernetes.lan.basmaas.nl
+        paths:
+        - path: /
+          pathType: ImplementationSpecific
+      tls:
+      - secretName: auth.doyoueventrack.kubernetes.lan.basmaas.nl
+        hosts:
+          - auth.doyoueventrack.kubernetes.lan.basmaas.nl

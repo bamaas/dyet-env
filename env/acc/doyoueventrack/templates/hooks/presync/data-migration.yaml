@@ -1,0 +1,48 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  generateName: data-migration-
+  annotations:
+    argocd.argoproj.io/hook: PreSync
+    argocd.argoproj.io/hook-delete-policy: HookSucceeded
+spec:
+  backoffLimit: 0
+  ttlSecondsAfterFinished: 60
+  activeDeadlineSeconds: 360
+  template:
+    metadata:
+      labels:
+        argocd.hook.presync: data-migration
+    spec:
+      restartPolicy: Never
+      serviceAccountName: superuser
+      containers:
+      - name: data-migration
+        image: bamaas/dyet-developer:0.0.22
+        imagePullPolicy: IfNotPresent
+        env:
+          - name: NAMESPACE_EXPORT
+            value: prd
+          - name: RELEASE_NAME_EXPORT
+            value: doyoueventrack-prd
+          - name: NAMESPACE_IMPORT
+            value: acc
+          - name: RELEASE_NAME_IMPORT
+            value: doyoueventrack-acc
+          - name: DRONE_SERVER
+            value: https://drone.kubernetes.lan.basmaas.nl
+          - name: DRONE_TOKEN
+            value: {{ .Values.drone.token }}
+        command: 
+          - /bin/bash
+          - -c
+          - |
+            set -e
+            echo "> Cloning Bas/env"
+            git clone https://gitea.kubernetes.lan.basmaas.nl/Bas/env.git env && cd env
+            echo "> Triggering data migration pipeline to export ${RELEASE_NAME_EXPORT} from namespace ${NAMESPACE_EXPORT} into ${RELEASE_NAME_IMPORT} in namespace ${NAMESPACE_IMPORT}..."
+            build_number=$(drone build create --branch master Bas/env --param NAMESPACE_EXPORT=${NAMESPACE_EXPORT} --param RELEASE_NAME_EXPORT=${RELEASE_NAME_EXPORT} --param NAMESPACE_IMPORT=${NAMESPACE_IMPORT} --param RELEASE_NAME_IMPORT=${RELEASE_NAME_IMPORT} --format "{{ .Number }}")
+            echo "> Cloning Bas/drone-common"
+            git clone -b master https://gitea.kubernetes.lan.basmaas.nl/Bas/drone-common.git .common
+            echo "> Waiting until pipeline build number ${build_number} for Bas/env succeeded..."
+            /bin/sh .common/wait-until-build-succeeded Bas/env ${build_number}
